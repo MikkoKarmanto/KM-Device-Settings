@@ -20,3 +20,8 @@ This application can remove and add default startup applications for MFP devices
 ````cmd
 .\KM-Device-Settings.exe --csv_file DeviceList.csv
 ````
+
+## CSV structure
+
+>ipaddress,password
+>192.168.1.10,AdminPasswordOfDevice
