@@ -3,7 +3,49 @@ from bs4 import BeautifulSoup
 import time
 import json
 
-def set_settings(password, ip_address, disable_Default_Application, verify_certificate=False):
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = dict(base)
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+def _build_openapi_settings(session_token: str, disable: bool, options: dict | None) -> dict:
+    # Defaults reflect previous hard-coded values
+    defaults = {
+        "Token": session_token,
+        "OpenApi": {
+            "SslPortNo": "50003",
+            "Proxy": {"ServerAddress": "", "PortNo": "8080", "SslPortNo": "8080", "FtpPortNo": "21", "UserName": ""},
+            "VerificationStrength": {
+                "Client": "Off",
+                "ExpirationDate": "Off",
+                "CN": "Off",
+                "KeyDirections": "Off",
+                "Chain": "Off",
+                "LapseConfirmation": "Off",
+            },
+            "HTTPVersionSetting": "HttpV2n1",
+            "OpenApiEnable": "OnWithoutPassword",
+            "ExtApplicationLink": "On",
+            "SpecifiedAppMode": {"Enable": "Off" if disable else "On"}
+        },
+    }
+
+    # Allow overrides for any OpenApi field
+    merged = _deep_merge(defaults, {"OpenApi": options or {}})
+
+    # Ensure SpecifiedAppMode.Enable reflects disable flag
+    try:
+        merged["OpenApi"]["SpecifiedAppMode"]["Enable"] = "Off" if disable else "On"
+    except Exception:
+        merged.setdefault("OpenApi", {}).setdefault("SpecifiedAppMode", {})["Enable"] = "Off" if disable else "On"
+
+    return merged
+
+def set_settings(password, ip_address, disable_Default_Application, verify_certificate=False, options: dict | None = None):
     session_token = None
     headers = {
         'accept': 'application/json, text/javascript, */*; q=0.01',
@@ -27,10 +69,10 @@ def set_settings(password, ip_address, disable_Default_Application, verify_certi
             
             if disable_Default_Application:
                 print('Disabling default application...')
-                session, status = disable_default_application(session, ip_address, session_token, headers, verify_certificate)
+                session, status = disable_default_application(session, ip_address, session_token, headers, verify_certificate, options)
             else:
                 print('Enabling default application...')
-                session, status = enable_default_application(session, ip_address, session_token, headers, verify_certificate)
+                session, status = enable_default_application(session, ip_address, session_token, headers, verify_certificate, options)
                 
             session = logout(session, ip_address, headers, verify_certificate)
 
@@ -64,7 +106,8 @@ def login(session, ip_address, password, headers, verify_certificate=False):
         
         if response.headers.get('Content-Type').split(';')[0] == 'text/html':
             soup = BeautifulSoup(response.text, 'html.parser')
-            session_token = soup.select_one('input[type="hidden"][id="h_token"]')['value']
+            token_el = soup.select_one('input[type="hidden"][id="h_token"]')
+            session_token = token_el['value'] if token_el and token_el.has_attr('value') else None
             if session_token:
                 print('Login to portal successful.')
                 print(f'SessionID: {session.cookies.get("ID")}')
@@ -75,7 +118,8 @@ def login(session, ip_address, password, headers, verify_certificate=False):
         
         elif response.headers.get('Content-Type').split(';')[0] == 'text/xml':
             soup = BeautifulSoup(response.text, 'xml')
-            if soup.select_one('Function').text == 'err':
+            func = soup.select_one('Function')
+            if func is not None and func.text == 'err':
                 print(f'Could not login to device {login_url}.')
             else:
                 print('Could not read the error message.')
@@ -112,7 +156,8 @@ def logout(session, ip_address, headers, verify_certificate=False):
         
         elif response.headers.get('Content-Type').split(';')[0] == 'text/xml':
             soup = BeautifulSoup(response.text, 'xml')
-            if soup.select_one('Function').text == 'err':
+            func = soup.select_one('Function')
+            if func is not None and func.text == 'err':
                 print('Could not logout.')
             else:
                 print('Could not read the error message.')
@@ -131,28 +176,10 @@ def logout(session, ip_address, headers, verify_certificate=False):
         return session
 
 
-def disable_default_application(session, ip_address, session_token, headers, verify_certificate=False):
+def disable_default_application(session, ip_address, session_token, headers, verify_certificate=False, options: dict | None = None):
     try:
         openApiSettings_url = f'{ip_address}/wcd/api/AppReqSetCustomMessage/_004_014_IOP000'
-        openApi_Settings = {
-            "Token": session_token,
-            "OpenApi": {
-                "SslPortNo": "50003",
-                "Proxy": { "ServerAddress": "", "PortNo": "8080", "SslPortNo": "8080", "FtpPortNo": "21", "UserName": "" },
-                "VerificationStrength": {
-                "Client": "Off",
-                "ExpirationDate": "Off",
-                "CN": "Off",
-                "KeyDirections": "Off",
-                "Chain": "Off",
-                "LapseConfirmation": "Off"
-                },
-                "HTTPVersionSetting": "HttpV2n1",
-                "OpenApiEnable": "OnWithoutPassword",
-                "ExtApplicationLink": "On",
-                "SpecifiedAppMode": { "Enable": "Off" }
-            }
-        }
+        openApi_Settings = _build_openapi_settings(session_token, True, options)
 
         response = session.post(openApiSettings_url, data=json.dumps(openApi_Settings), headers=headers, timeout=10, verify=verify_certificate)
 
@@ -161,7 +188,8 @@ def disable_default_application(session, ip_address, session_token, headers, ver
 
         elif response.headers.get('Content-Type').split(';')[0] == 'text/xml':
             soup = BeautifulSoup(response.text, 'xml')
-            if (soup.select_one('Function') == 'err'):
+            func = soup.select_one('Function')
+            if func is not None and func.text == 'err':
                 print(soup.select_one('Item Code'))
             else:
                 print('Could not read the error message.')
@@ -183,33 +211,15 @@ def disable_default_application(session, ip_address, session_token, headers, ver
             print(f'{response.headers}')
             print(f'{response.text}')
         return session, False
-    
+
     except Exception as ex:
         print(f'There was an trying to disable default application. {ex}')
-        return session
+        return session, False
 
-def enable_default_application(session, ip_address, session_token, headers, verify_certificate=False):
+def enable_default_application(session, ip_address, session_token, headers, verify_certificate=False, options: dict | None = None):
     try:
         openApiSettings_url = f'{ip_address}/wcd/api/AppReqSetCustomMessage/_004_014_IOP000'
-        openApi_Settings = {
-            "Token": session_token,
-            "OpenApi": {
-                "SslPortNo": "50003",
-                "Proxy": { "ServerAddress": "", "PortNo": "8080", "SslPortNo": "8080", "FtpPortNo": "21", "UserName": "" },
-                "VerificationStrength": {
-                "Client": "Off",
-                "ExpirationDate": "Off",
-                "CN": "Off",
-                "KeyDirections": "Off",
-                "Chain": "Off",
-                "LapseConfirmation": "Off"
-                },
-                "HTTPVersionSetting": "HttpV2n1",
-                "OpenApiEnable": "OnWithoutPassword",
-                "ExtApplicationLink": "On",
-                "SpecifiedAppMode": { "Enable": "On", "StartUpApplication": "3", "MfpBasicFunction": "On" }
-            }
-        }
+        openApi_Settings = _build_openapi_settings(session_token, False, options)
 
         response = session.post(openApiSettings_url, data=json.dumps(openApi_Settings), headers=headers, timeout=10, verify=verify_certificate)
 
@@ -218,14 +228,15 @@ def enable_default_application(session, ip_address, session_token, headers, veri
 
         elif response.headers.get('Content-Type').split(';')[0] == 'text/xml':
             soup = BeautifulSoup(response.text, 'xml')
-            if (soup.select_one('Function') == 'err'):
+            func = soup.select_one('Function')
+            if func is not None and func.text == 'err':
                 print(soup.select_one('Item Code'))
             else:
                 print('Could not read the error message.')
                 print(f'{response.url}')
                 print(f'{response.status_code}')
                 print(f'{response.text}')
-            return None
+            return session, False
         elif response.headers.get('Content-Type').split(';')[0] == 'text/plain':
             if response.json()['Result']['ResultInfo'] == 'Ack':
                 print('Default application Enabled.')
@@ -242,8 +253,8 @@ def enable_default_application(session, ip_address, session_token, headers, veri
         return session, False
     
     except Exception as ex:
-        print(f'There was an trying to disable default application. {ex}')
-        return session
+        print(f'There was an trying to enable default application. {ex}')
+        return session, False
 
 def get_new_token(session, ip_address, headers, verify_certificate=False):
     try:

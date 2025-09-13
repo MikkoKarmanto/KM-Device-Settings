@@ -27,18 +27,7 @@ def ping_check_success(host: str) -> bool:
         print(f"Error occurred while pinging {host}: {str(e)}")
         return False
 
-if __name__ == '__main__':
-    # Create an argument parser
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--csv_file', type=str, help='Path to the CSV file' , required=True)
-    parser.add_argument('--disable', help='Disables default application', default=False, action='store_true')
-
-    # Parse the command line arguments
-    args = parser.parse_args()
-
-    csv_file = args.csv_file
-    disable_Default_Application = args.disable
-
+def run_console(csv_file, disable_Default_Application):
     if not os.path.isfile(csv_file):
         print(f"Error: {csv_file} does not exist. Create a file with the following columns: ipaddress, password.")
         sys.exit(1)
@@ -48,6 +37,9 @@ if __name__ == '__main__':
         for i,row in enumerate(reader):
             ipaddress = row.get('ipaddress')
             password = row.get('password')
+            if not ipaddress or not password:
+                print(f"Skipping row {i+1}: missing ipaddress or password")
+                continue
             try:
                 print(f'Checking {ipaddress}...')
                 if ping_check_success(ipaddress):
@@ -68,5 +60,25 @@ if __name__ == '__main__':
             except Exception as e:
                 print(f"An error occurred: {str(e)}")
                 continue
+
+if __name__ == '__main__':
+    # Create an argument parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--csv_file', type=str, help='Path to the CSV file')
+    parser.add_argument('--disable', help='Disables default application', default=False, action='store_true')
+    parser.add_argument('--gui', help='Launch GUI mode', default=False, action='store_true')
+
+    # Parse the command line arguments
+    args = parser.parse_args()
+
+    if args.gui or not args.csv_file:
+        # Launch GUI
+        from gui import main as gui_main
+        gui_main()
+    else:
+        # Run console mode
+        csv_file = args.csv_file
+        disable_Default_Application = args.disable
+        run_console(csv_file, disable_Default_Application)
 
 
